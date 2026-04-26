@@ -1,6 +1,7 @@
 import argparse
 import hashlib
 import json
+import sys
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -245,9 +246,21 @@ def main() -> None:
         )
 
         logger.info('pipeline_complete', target_directory=str(out_dir))
-    except Exception as e:
-        logger.error(f'Something went wrong. Only the following are supported:\n\n{e}')
+    except FileNotFoundError as e:
+        logger.error(f'Could not find the specified file: {e}')
+        print('\n')
         parser.print_help()
+        sys.exit(1)
+
+    except ValueError as e:
+        logger.error(f'Invalid input provided: {e}')
+        print('\n')
+        parser.print_help()
+        sys.exit(1)
+
+    except Exception as e:
+        logger.exception(f'A fatal error occurred: {e}')
+        sys.exit(1)
 
 
 if __name__ == '__main__':

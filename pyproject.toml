@@ -22,3 +22,32 @@ horadric-data = "horadric_lib.datasets.manager:main"
 requires = ["uv_build>=0.11.2,<0.12.0"]
 build-backend = "uv_build"
 
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+fix = true
+
+[tool.ruff.lint]
+ignore = [
+	"W191",  # indentation contains tabs
+	"B008", # function call in default argument
+    "D1",
+]
+select = [
+	"E",  # Pyflakes errors
+	"W",  # Pyflakes warnings
+	"F",  # Pyflakes errors
+	"I",  # isort
+	"C",  # flake8-comprehensions
+	"B",  # flake8-bugbear
+	"UP", # pyupgrade,
+	"D",  # pydocstyle
+]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.ruff.format]
+quote-style = "single"
+docstring-code-format = true

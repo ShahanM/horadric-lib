@@ -213,7 +213,7 @@ def main() -> None:
         '--top-p',
         type=float,
         default=0.10,
-        help='Percentage of data to keep (e.g., 0.10 for 10%)',
+        help='Percentage of data to keep (e.g., 0.10 for 10%%)',
     )
     parser.add_argument(
         '--test-size',

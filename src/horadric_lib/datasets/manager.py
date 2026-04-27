@@ -2,6 +2,7 @@ import argparse
 import hashlib
 import json
 import sys
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import cast
@@ -17,9 +18,25 @@ from horadric_lib.logging import configure_logging
 
 logger = structlog.getLogger('DatasetLoader')
 
-DATA_DIR = Path('data')
-REGISTRY_FILE = DATA_DIR / 'dataset_registry.json'
 SIX_MONTHS_DAYS = 180
+
+KNOWN_DATASETS = {
+    'satbench': 'LLM4Code/SATBench',
+    # We can add RecSys datasets here later:
+    # 'movielens_1m': 'movielens/1m',
+    # 'mind_small': 'ms-mind/small'
+}
+
+
+def preprocess_satbench(df: pd.DataFrame) -> pd.DataFrame:
+    """Standardizes SATBench columns for the Concept Invariance project."""
+    logger.info('Applying SATBench-specific preprocessing...')
+    return df.rename(columns={'readable': 'original_cnf', 'scenario': 'scenario_text'})
+
+
+PREPROCESSORS: dict[str, Callable[[pd.DataFrame], pd.DataFrame]] = {
+    'satbench': preprocess_satbench,
+}
 
 
 def calculate_sha256(filepath: Path) -> str:
@@ -30,19 +47,19 @@ def calculate_sha256(filepath: Path) -> str:
     return sha256_hash.hexdigest()
 
 
-def load_registry() -> dict:
-    if REGISTRY_FILE.exists():
+def load_registry(registry_file: Path) -> dict:
+    if registry_file.exists():
         try:
-            with open(REGISTRY_FILE) as f:
+            with open(registry_file) as f:
                 return json.load(f)
         except json.JSONDecodeError:
             logger.warning('Registry file corrupted. Creating a new one.')
     return {'files': {}, 'latest': None}
 
 
-def save_registry(registry: dict) -> None:
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    with open(REGISTRY_FILE, 'w') as f:
+def save_registry(registry: dict, registry_file: Path) -> None:
+    registry_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(registry_file, 'w') as f:
         json.dump(registry, f, indent=4)
 
 
@@ -63,12 +80,12 @@ def fetch_huggingface_dataset(dataset_id: str, output_path: Path) -> None:
     logger.info('hf_dataset_saved', total_size=len(df), path=str(output_path))
 
 
-def get_fresh_remote_dataset(dataset_id: str, registry: dict) -> Path:
+def get_fresh_remote_dataset(dataset_id: str, registry: dict, data_dir: Path, registry_file: Path) -> Path:
     """Handles hashing and registry updating for a fresh fetch."""
     timestamp_str = datetime.now().strftime('%Y%m%d%H%M')
     safe_name = dataset_id.replace('/', '_')
     filename = f'{timestamp_str}_{safe_name}_full.bpk'
-    filepath = DATA_DIR / filename
+    filepath = data_dir / filename
 
     fetch_huggingface_dataset(dataset_id, filepath)
 
@@ -82,17 +99,15 @@ def get_fresh_remote_dataset(dataset_id: str, registry: dict) -> Path:
         'dataset_id': dataset_id,
     }
     registry['latest'] = filename
-    save_registry(registry)
+    save_registry(registry, registry_file)
 
     return filepath
 
 
-def load_raw_dataset(source: str, force_download: bool = False, target_filename: str | None = None) -> pd.DataFrame:
-    """Main ingestion router.
-
-    If `source` is a valid local path, it loads it directly without copying.
-    If `source` is a HuggingFace ID, it manages the caching registry.
-    """
+def load_raw_dataset(
+    source: str, data_dir: Path, registry_file: Path, force_download: bool = False, target_filename: str | None = None
+) -> pd.DataFrame:
+    """Main ingestion router."""
     source_path = Path(source)
     if source_path.exists() and source_path.is_file():
         logger.info('loading_local_file', path=str(source_path))
@@ -105,31 +120,30 @@ def load_raw_dataset(source: str, force_download: bool = False, target_filename:
         else:
             raise ValueError(f'Unsupported local file format: {source_path.suffix}')
 
-    # Fallback to HuggingFace remote handling
-    registry = load_registry()
+    registry = load_registry(registry_file)
 
     if force_download:
-        filepath = get_fresh_remote_dataset(source, registry)
+        filepath = get_fresh_remote_dataset(source, registry, data_dir, registry_file)
         return load(filepath)
 
     filename_to_check = target_filename if target_filename else registry.get('latest')
 
     if not filename_to_check or filename_to_check not in registry['files']:
-        filepath = get_fresh_remote_dataset(source, registry)
+        filepath = get_fresh_remote_dataset(source, registry, data_dir, registry_file)
         return load(filepath)
 
-    filepath = DATA_DIR / filename_to_check
+    filepath = data_dir / filename_to_check
     file_info = registry['files'][filename_to_check]
 
     if not filepath.exists() or filepath.stat().st_size != file_info['size']:
-        filepath = get_fresh_remote_dataset(source, registry)
+        filepath = get_fresh_remote_dataset(source, registry, data_dir, registry_file)
         return load(filepath)
 
     age_days = (datetime.now() - datetime.fromisoformat(file_info['created_at'])).days
     if age_days > SIX_MONTHS_DAYS:
         choice = input(f'Cache {filename_to_check} is > 6 months old. Redownload? [y/N]: ').lower()
         if choice == 'y':
-            filepath = get_fresh_remote_dataset(source, registry)
+            filepath = get_fresh_remote_dataset(source, registry, data_dir, registry_file)
 
     logger.info('loading_cached_dataset', filename=filename_to_check)
     return load(filepath)
@@ -137,6 +151,7 @@ def load_raw_dataset(source: str, force_download: bool = False, target_filename:
 
 def create_dataset_slice(
     df: pd.DataFrame,
+    data_dir: Path,
     dataset_name: str,
     slice_name: str,
     sort_col: str | None = None,
@@ -158,7 +173,7 @@ def create_dataset_slice(
         else:
             df_slice = df
 
-    output_dir = DATA_DIR / dataset_name / slice_name
+    output_dir = data_dir / dataset_name / slice_name
     output_dir.mkdir(parents=True, exist_ok=True)
 
     if test_size > 0.0:
@@ -181,82 +196,59 @@ def create_dataset_slice(
 
 def main() -> None:
     conf = HoradricConfig.load_or_create()
-    configure_logging(log_dir=conf.log_dir)
 
-    parser = argparse.ArgumentParser(description='Generic Dataset Fetcher and Slicer')
-    parser.add_argument(
-        '--source',
-        type=str,
-        default=conf.default_hf_source,
-        help='HF ID or Local file path',
-    )
-    parser.add_argument('--data-dir', type=str, default=conf.data_dir, help='Path to the data')
+    data_dir = Path(conf.data_dir)
+    log_dir = Path(conf.runtime_dir) / 'logs'
+    registry_file = data_dir / 'dataset_registry.json'
+
+    configure_logging(log_dir=str(log_dir))
+
+    parser = argparse.ArgumentParser(description='Horadric Dataset Zoo Manager')
     parser.add_argument(
         '--dataset-name',
         type=str,
-        default='SATBench',
-        help='Root folder name for this dataset',
+        required=True,
+        help=f'Name of the dataset. Known options: {list(KNOWN_DATASETS.keys())}',
     )
     parser.add_argument(
-        '--slice-name',
+        '--source',
         type=str,
-        default='hard_10_percent',
-        help='Subfolder name for this slice',
+        help='Override HuggingFace ID or provide Local file path',
     )
-    parser.add_argument(
-        '--sort-col',
-        type=str,
-        default='num_clauses',
-        help='Column to sort by before slicing',
-    )
-    parser.add_argument(
-        '--top-p',
-        type=float,
-        default=0.10,
-        help='Percentage of data to keep (e.g., 0.10 for 10%%)',
-    )
-    parser.add_argument(
-        '--test-size',
-        type=float,
-        default=0.20,
-        help='Percentage to reserve for test.parquet',
-    )
-    parser.add_argument(
-        '--save-config',
-        action='store_true',
-        help='Save these CLI args back to horadric_conf.json',
-    )
+    parser.add_argument('--slice-name', type=str, default='default_slice')
+    parser.add_argument('--sort-col', type=str, default=None)
+    parser.add_argument('--top-p', type=float, default=1.0)
+    parser.add_argument('--test-size', type=float, default=0.0)
     parser.add_argument('--force-download', action='store_true')
 
     try:
         args = parser.parse_args()
 
-        raw_df = load_raw_dataset(source=args.source, force_download=args.force_download)
-        if args.dataset_name == 'SATBench':
-            raw_df = raw_df.rename(columns={'readable': 'original_cnf', 'scenario': 'scenario_text'})
+        dataset_key = args.dataset_name.lower()
+        source = args.source or KNOWN_DATASETS.get(dataset_key)
+
+        if not source:
+            raise ValueError(f"Unknown dataset '{args.dataset_name}' and no --source provided.")
+
+        raw_df = load_raw_dataset(
+            source=source, data_dir=data_dir, registry_file=registry_file, force_download=args.force_download
+        )
+
+        if dataset_key in PREPROCESSORS:
+            raw_df = PREPROCESSORS[dataset_key](raw_df)
 
         out_dir = create_dataset_slice(
             df=raw_df,
+            data_dir=data_dir,
             dataset_name=args.dataset_name,
             slice_name=args.slice_name,
             sort_col=args.sort_col,
             top_p=args.top_p,
-            ascending=False,  # False to get the "hardest" (highest num_clauses)
+            ascending=False,
             test_size=args.test_size,
         )
 
         logger.info('pipeline_complete', target_directory=str(out_dir))
-    except FileNotFoundError as e:
-        logger.error(f'Could not find the specified file: {e}')
-        print('\n')
-        parser.print_help()
-        sys.exit(1)
-
-    except ValueError as e:
-        logger.error(f'Invalid input provided: {e}')
-        print('\n')
-        parser.print_help()
-        sys.exit(1)
 
     except Exception as e:
         logger.exception(f'A fatal error occurred: {e}')

@@ -516,7 +516,6 @@ name = "horadric-lib"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "asgi-correlation-id" },
     { name = "structlog" },
 ]
 
@@ -527,17 +526,20 @@ datasets = [
     { name = "pandas" },
     { name = "scikit-learn" },
 ]
+logging-extras = [
+    { name = "asgi-correlation-id" },
+]
 
 [package.metadata]
 requires-dist = [
-    { name = "asgi-correlation-id", specifier = ">=5.0.0" },
+    { name = "asgi-correlation-id", marker = "extra == 'logging-extras'", specifier = ">=5.0.0" },
     { name = "binpickle", marker = "extra == 'datasets'", specifier = ">=0.3.4" },
     { name = "datasets", marker = "extra == 'datasets'", specifier = ">=4.8.4" },
     { name = "pandas", marker = "extra == 'datasets'", specifier = ">=3.0.2" },
     { name = "scikit-learn", marker = "extra == 'datasets'", specifier = ">=1.8.0" },
     { name = "structlog", specifier = ">=25.5.0" },
 ]
-provides-extras = ["datasets"]
+provides-extras = ["datasets", "logging-extras"]
 
 [[package]]
 name = "httpcore"

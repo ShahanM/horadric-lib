@@ -22,6 +22,9 @@ datasets = [
     "pandas>=3.0.2",
     "scikit-learn>=1.8.0",
 ]
+logging-extras = [
+    "asgi-correlation-id>=5.0.0",
+]
 
 [tool.uv.sources]
 horadric-lib = {git="https://github.com/ShahanM/horadric-lib"}

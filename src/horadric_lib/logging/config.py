@@ -5,6 +5,24 @@ from datetime import datetime
 from pathlib import Path
 
 import structlog
+from structlog.typing import EventDict, WrappedLogger
+
+try:
+    from asgi_correlation_id import correlation_id
+
+    HAS_CORRELATION_ID = True
+except ImportError:
+    correlation_id = None
+    HAS_CORRELATION_ID = False
+
+
+def add_correlation_id(logger: WrappedLogger, method_name: str, event_dict: EventDict) -> EventDict:
+    """Injects the correlation ID if the web logging extra is installed."""
+    if HAS_CORRELATION_ID and correlation_id is not None:
+        req_id = correlation_id.get()
+        if req_id:
+            event_dict['request_id'] = req_id
+    return event_dict
 
 
 class ConsoleNoiseFilter(logging.Filter):
@@ -47,6 +65,7 @@ def configure_logging(log_dir: str | Path, app_name: str | None = None) -> str:
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
+        add_correlation_id,
         structlog.stdlib.PositionalArgumentsFormatter(),
         structlog.processors.TimeStamper(fmt='iso'),
         structlog.processors.StackInfoRenderer(),

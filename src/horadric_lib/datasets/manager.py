@@ -180,6 +180,9 @@ def create_dataset_slice(
         logger.info('splitting_train_test', test_size=test_size)
         train_df, test_df = train_test_split(df_slice, test_size=test_size, random_state=random_seed)
 
+        train_df = cast(pd.DataFrame, train_df)
+        test_df = cast(pd.DataFrame, test_df)
+
         train_path = output_dir / 'train.parquet'
         test_path = output_dir / 'test.parquet'
 
@@ -225,21 +228,54 @@ def main() -> None:
         args = parser.parse_args()
 
         dataset_key = args.dataset_name.lower()
-        source = args.source or KNOWN_DATASETS.get(dataset_key)
+        local_config = conf.local_datasets.get(dataset_key, {})
+        raw_source = local_config.get('source') or args.source or KNOWN_DATASETS.get(dataset_key)
 
-        if not source:
-            raise ValueError(f"Unknown dataset '{args.dataset_name}' and no --source provided.")
+        if not raw_source:
+            raise ValueError(
+                f"Unknown dataset '{args.dataset_name}. Provide a --source, or define it in horadric_conf.json."
+            )
 
-        raw_df = load_raw_dataset(
-            source=source, data_dir=data_dir, registry_file=registry_file, force_download=args.force_download
-        )
+        source: str = str(raw_source)
+        source_path = Path(source)
+
+        source_path = Path(source)
+        if source_path.is_dir():
+            target_filename = local_config.get('target_file')
+            if not target_filename:
+                raise ValueError(
+                    f"The source for '{dataset_key}' is a directory, but no 'target_file' "
+                    'was specified in the horadric_conf.json.'
+                )
+
+            target_file = source_path / target_filename
+            if not target_file.exists():
+                raise FileNotFoundError(f'Configured target file not found: {target_file}')
+
+            logger.info('loading_local_target_file', path=str(target_file))
+            if target_file.suffix == '.csv':
+                raw_df = pd.read_csv(target_file)
+            elif target_file.suffix == '.parquet':
+                raw_df = pd.read_parquet(target_file)
+            else:
+                raise ValueError(f'Unsupported file format for local ingestion: {target_file.suffix}')
+        else:
+            raw_df = load_raw_dataset(
+                source=source, data_dir=data_dir, registry_file=registry_file, force_download=args.force_download
+            )
 
         if dataset_key in PREPROCESSORS:
             raw_df = PREPROCESSORS[dataset_key](raw_df)
+        raw_runtime = local_config.get('runtime')
+
+        if raw_runtime is not None:
+            runtime_dir = Path(str(raw_runtime))
+        else:
+            runtime_dir = data_dir / dataset_key
 
         out_dir = create_dataset_slice(
             df=raw_df,
-            data_dir=data_dir,
+            data_dir=runtime_dir,
             dataset_name=args.dataset_name,
             slice_name=args.slice_name,
             sort_col=args.sort_col,

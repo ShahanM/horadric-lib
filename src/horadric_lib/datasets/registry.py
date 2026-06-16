@@ -22,7 +22,7 @@ def summarize_registry() -> None:
         return
 
     try:
-        with open(REGISTRY_FILE, 'r') as f:
+        with open(REGISTRY_FILE) as f:
             registry = json.load(f)
     except json.JSONDecodeError:
         print(f'Error reading {REGISTRY_FILE}. The file might be corrupted.')

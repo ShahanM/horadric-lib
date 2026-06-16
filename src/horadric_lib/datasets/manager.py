@@ -23,7 +23,7 @@ SIX_MONTHS_DAYS = 180
 KNOWN_DATASETS = {
     'satbench': 'LLM4Code/SATBench',
     # We can add RecSys datasets here later:
-    # 'movielens_1m': 'movielens/1m',
+    # 'movielens': 'movielens/1m',
     # 'mind_small': 'ms-mind/small'
 }
 

@@ -1,5 +1,6 @@
 import logging
 import logging.config
+import os
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -44,23 +45,14 @@ class ConsoleNoiseFilter(logging.Filter):
         return True
 
 
-def configure_logging(log_dir: str | Path, app_name: str | None = None) -> str:
+def configure_logging(log_dir: str | Path, app_name: str | None = None) -> str | None:
     """Configures structlog to output.
 
     1. Pretty colorful text to Console.
     2. Structured JSON to a File in the specified log_dir.
     """
-    if app_name is None:
-        if sys.argv and sys.argv[0]:
-            app_name = Path(sys.argv[0]).stem
-        else:
-            app_name = 'app'
-    log_dir_path = Path(log_dir)
-    log_dir_path.mkdir(parents=True, exist_ok=True)
-
-    timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-    logfile_path = str(log_dir_path / f'{app_name}_run_{timestamp}.jsonl')
-
+    is_lambda = 'AWS_LAMBDA_FUNCTION_NAME' in os.environ
+    logfile_path = None
     shared_processors = [
         structlog.contextvars.merge_contextvars,
         structlog.stdlib.add_logger_name,
@@ -71,45 +63,62 @@ def configure_logging(log_dir: str | Path, app_name: str | None = None) -> str:
         structlog.processors.StackInfoRenderer(),
         structlog.processors.UnicodeDecoder(),
     ]
+    formatters = {
+        'json_formatter': {
+            '()': structlog.stdlib.ProcessorFormatter,
+            'processor': structlog.processors.JSONRenderer(),
+            'foreign_pre_chain': shared_processors,
+        }
+    }
+    handlers = {}
+    active_handlers = []
+
+    if is_lambda:
+        handlers['console'] = {
+            'level': 'INFO' if 'AWS_LAMBDA_RUNTIME_API' in os.environ else 'DEBUG',
+            'class': 'loggin.StreamHandler',
+            'stream': 'ext://sys.stdout',
+            'formatter': 'json_formatter',
+            'filters': ['console_noise_filter'],
+        }
+        active_handlers.append('console')
+    else:
+        if app_name is None:
+            app_name = Path(sys.argv[0]).stem if sys.argv and sys.argv[0] else 'app'
+        log_dir_path = Path(log_dir)
+        log_dir_path.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        logfile_path = str(log_dir_path / f'{app_name}_run_{timestamp}.jsonl')
+
+        formatters['colored_console'] = {
+            '()': structlog.stdlib.ProcessorFormatter,
+            'processor': structlog.dev.ConsoleRenderer(colors=True),
+            'foreign_pre_chain': shared_processors,
+        }
+        handlers['console'] = {
+            'level': 'DEBUG',
+            'class': 'logging.StreamHandler',
+            'formatter': 'colored_console',
+            'filters': ['console_noise_filter'],
+        }
+        handlers['file'] = {
+            'level': 'DEBUG',
+            'class': 'logging.FileHandler',
+            'filename': logfile_path,
+            'formatter': 'json_formatter',
+            'encoding': 'utf-8',
+        }
+        active_handlers.extend(['console', 'file'])
 
     logging_config = {
         'version': 1,
         'disable_existing_loggers': False,
-        'filters': {
-            'console_noise_filter': {
-                '()': ConsoleNoiseFilter,
-            }
-        },
-        'formatters': {
-            'json_file': {
-                '()': structlog.stdlib.ProcessorFormatter,
-                'processor': structlog.processors.JSONRenderer(),
-                'foreign_pre_chain': shared_processors,
-            },
-            'colored_console': {
-                '()': structlog.stdlib.ProcessorFormatter,
-                'processor': structlog.dev.ConsoleRenderer(colors=True),
-                'foreign_pre_chain': shared_processors,
-            },
-        },
-        'handlers': {
-            'console': {
-                'level': 'DEBUG',
-                'class': 'logging.StreamHandler',
-                'formatter': 'colored_console',
-                'filters': ['console_noise_filter'],
-            },
-            'file': {
-                'level': 'DEBUG',
-                'class': 'logging.FileHandler',
-                'filename': logfile_path,
-                'formatter': 'json_file',
-                'encoding': 'utf-8',
-            },
-        },
+        'filters': {'console_noise_filter': {'()': ConsoleNoiseFilter}},
+        'formatters': formatters,
+        'handlers': handlers,
         'loggers': {
             '': {
-                'handlers': ['console', 'file'],
+                'handlers': active_handlers,
                 'level': 'DEBUG',
                 'propagate': True,
             },
@@ -118,10 +127,7 @@ def configure_logging(log_dir: str | Path, app_name: str | None = None) -> str:
 
     logging.config.dictConfig(logging_config)
     structlog.configure(
-        processors=shared_processors
-        + [
-            structlog.stdlib.ProcessorFormatter.wrap_for_formatter,
-        ],
+        processors=shared_processors + [structlog.stdlib.ProcessorFormatter.wrap_for_formatter],
         logger_factory=structlog.stdlib.LoggerFactory(),
         wrapper_class=structlog.stdlib.BoundLogger,
         cache_logger_on_first_use=True,

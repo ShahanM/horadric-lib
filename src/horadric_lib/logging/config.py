@@ -76,7 +76,7 @@ def configure_logging(log_dir: str | Path, app_name: str | None = None) -> str |
     if is_lambda:
         handlers['console'] = {
             'level': 'INFO' if 'AWS_LAMBDA_RUNTIME_API' in os.environ else 'DEBUG',
-            'class': 'loggin.StreamHandler',
+            'class': 'logging.StreamHandler',
             'stream': sys.stdout,
             'formatter': 'json_formatter',
             'filters': ['console_noise_filter'],

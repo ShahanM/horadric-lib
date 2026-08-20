@@ -1,6 +1,6 @@
 [project]
 name = "horadric-lib"
-version = "0.1.0"
+version = "0.1.1"
 description = "This is a utility module with some commonly used configurations for my projects."
 readme = "README.md"
 authors = [
